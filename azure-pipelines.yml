@@ -1,0 +1,101 @@
+trigger: 
+  branches:
+    include:
+      - "BDKPB-1164--Estabilsh-Build-Pipeline-for-Mobile-Application-(Development)"
+  paths:
+    include:
+      - "Bradken/bdk-insite/BDKPB-1164--Estabilsh-Build-Pipeline-for-Mobile-Application-(Development)/.devops"
+
+pr: 
+   branches:
+     include:
+      - "BDKPB-1164--Estabilsh-Build-Pipeline-for-Mobile-Application-(Development)"
+   paths:
+     include:
+      - "Bradken/bdk-insite/BDKPB-1164--Estabilsh-Build-Pipeline-for-Mobile-Application-(Development)/.devops"
+
+variables:
+  projectName: 'bdk-mobile-flutter'
+  tag: $(Build.BuildId)
+  
+stages:
+
+  # The first stage is to build the flutter application
+  - stage: Build
+    displayName: "Build Flutter Application" 
+    jobs:
+      - job: "Build"
+        steps:
+
+          # Add Flutter setup and build steps here
+          - task: CmdLine@2
+            displayName: 'Download and Install Flutter'
+            inputs:
+              # @Shannon - is there a better way to download Flutter?
+              script: |
+                wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.13.9-stable.tar.xz
+                tar -xf flutter_linux_3.13.9-stable.tar.xz
+                echo "##vso[task.setvariable variable=PATH]$(pwd)/flutter/bin:$PATH"
+
+          # This step runs the flutter doctor tool
+          - task: CmdLine@2
+            displayName: 'Run Flutter Doctor'
+            inputs:
+              script: flutter doctor
+
+          # download all the flutter dependencies here
+          - task: CmdLine@2
+            displayName: 'Install Flutter'
+            inputs:
+              script: /bdk-insite/ranch name/.devops/flutter pub get
+
+# build the flutter app for web
+          - task: CmdLine@2
+            displayName: 'Build Flutter App'
+            inputs:
+              script: flutter build web --release
+                      
+# copy the .devops folder to the build directory
+          - task : PublishPipelineArtifact@1
+            displayName: Copy .devops and Publish it as artifact
+            condition: always()
+            inputs:
+              targetPath: '$(Pipeline.Workspace)/s/.devops'
+              artifactType: 'pipeline'
+              artifactName: '.devops'          
+              
+
+
+- stage: Slack 
+      dependsOn: Build
+      condition: failed()
+      displayName: Push Build Logs to Slack
+   jobs:
+      -template: ../templates/slack.yaml
+
+  # This stage will deploy the application to the development environment (as an Azure static website)
+  - stage: Deploy
+    displayName: "Deploy Flutter to Azure Static Website"
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: "Deploy"
+        steps:
+          - task: DownloadBuildArtifacts@0
+            displayName: 'Download Artifacts'
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: 'flutter-web-app'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - task: AzureCLI@2
+            displayName: 'Deploy to Azure Static Website'
+            inputs:
+              azureSubscription: 'bdkdvdataappserve-sp'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az storage blob upload-batch -s $(System.ArtifactsDirectory)/flutter-web-app -d '$web' --account-name <bdkdvdataappserve-sp>
+
+
